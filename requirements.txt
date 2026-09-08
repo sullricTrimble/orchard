@@ -1,0 +1,7 @@
+numpy>=1.26
+opencv-python-headless>=4.8
+flask>=3.0
+scipy>=1.11
+pytest>=8.0
+# Optional live D455 / .bag playback
+# pyrealsense2

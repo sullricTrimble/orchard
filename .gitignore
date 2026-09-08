@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+venv/
+*.bag
+*.jpg
+*.png
+.coverage
+cpp/build/
