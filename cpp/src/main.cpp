@@ -26,9 +26,8 @@ static void print_live(const SteerCommand& cmd, const RowPerception& perc) {
     std::cout << "  lat=";
     if (cmd.lateral_error_m) std::cout << (*cmd.lateral_error_m >= 0 ? "+" : "") << *cmd.lateral_error_m;
     else std::cout << "--";
-    std::cout << "  pens=" << perc.trunks.size();
+    std::cout << "  trunks=" << perc.trunks.size();
     std::cout << "  conf=" << perc.confidence;
-    for (const auto& n : perc.notes) std::cout << "  " << n;
     std::cout << "\n";
 }
 

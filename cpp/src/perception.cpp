@@ -87,7 +87,7 @@ RowPerception perceive_pens(const Frame& frame, const Config& cfg) {
             xs.push_back(x); ys.push_back(y); zs.push_back(z);
         }
     }
-    if ((int)xs.size()<20) { result.notes.emplace_back("no_pen_band"); return result; }
+    if ((int)xs.size()<20) { result.notes.emplace_back("no_band"); return result; }
     std::vector<PenCluster> left, right;
     for (const auto& c: cluster_pens(xs,ys,zs,cfg.desk_cluster_eps_m,cfg.desk_cluster_min_points)) {
         if (c.xz_span>cfg.desk_max_span_m) continue;
@@ -97,20 +97,24 @@ RowPerception perceive_pens(const Frame& frame, const Config& cfg) {
     }
     std::sort(left.begin(), left.end(), [](const PenCluster& a, const PenCluster& b){ return a.z<b.z; });
     std::sort(right.begin(), right.end(), [](const PenCluster& a, const PenCluster& b){ return a.z<b.z; });
-    if (left.empty()) result.notes.emplace_back("left_pen_missing");
-    if (right.empty()) result.notes.emplace_back("right_pen_missing");
-    if (left.empty() || right.empty()) { result.notes.emplace_back("need_both_pens"); return result; }
+    if (left.empty()) result.notes.emplace_back("left_missing");
+    if (right.empty()) result.notes.emplace_back("right_missing");
+    if (left.empty() || right.empty()) { result.notes.emplace_back("need_both"); return result; }
     const PenCluster& L=left[0]; const PenCluster& R=right[0];
     const float gap=R.x-L.x;
-    if (gap<cfg.desk_min_gap_m || gap>cfg.desk_max_gap_m) { result.notes.emplace_back("pen_gap_rejected"); return result; }
+    if (gap<cfg.desk_min_gap_m || gap>cfg.desk_max_gap_m) { result.notes.emplace_back("gap_rejected"); return result; }
     const float center=0.5f*(L.x+R.x); const float lat=-center;
     if (std::abs(lat)>cfg.desk_max_lat_m) { result.notes.emplace_back("lat_rejected"); return result; }
     result.left_line=LineXZ{L.x,0.f}; result.right_line=LineXZ{R.x,0.f}; result.centerline=LineXZ{center,0.f};
     result.lateral_error_m=lat; result.heading_error_rad=0.f; result.row_width_m=gap;
     result.trunks.push_back({Trunk::Left,L.x,L.z,L.n});
     result.trunks.push_back({Trunk::Right,R.x,R.z,R.n});
-    result.confidence=std::abs(lat)<0.15f?0.85f:0.70f;
-    result.notes.emplace_back("desk_pens");
+    auto unit=[](float x){ return std::clamp(x,0.f,1.f); };
+    const float points=unit(std::min(L.n,R.n)/60.f);
+    const float depth_match=unit(1.f-std::abs(L.z-R.z)/0.30f);
+    const float compact=unit(1.f-std::max(L.xz_span,R.xz_span)/std::max(cfg.desk_max_span_m,1e-3f));
+    const float gap_q=unit(1.f-std::abs(gap-0.30f)/0.40f);
+    result.confidence=std::clamp(0.30f+0.28f*points+0.22f*depth_match+0.12f*compact+0.08f*gap_q,0.05f,0.99f);
     return result;
 }
 }  // namespace

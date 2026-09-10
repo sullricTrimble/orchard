@@ -89,7 +89,7 @@ INDEX_HTML = """<!doctype html>
       </div>
     </aside>
   </main>
-  <footer>Positive lateral = you are right of the gap (steer LEFT). Hold one pen on each side, 0.4–1.5 m in front of the camera.</footer>
+  <footer>Positive lateral = right of row center (steer LEFT). Speed uses tracked trunks plus planted spacing.</footer>
   <script>
     const half = 5;
     const bar = document.getElementById('bar');
@@ -110,7 +110,7 @@ INDEX_HTML = """<!doctype html>
       document.getElementById('conf').textContent = fmt((s.confidence||0)*100, ' %', 0);
       document.getElementById('spc').textContent = fmt(s.measured_spacing_m, ' m');
       document.getElementById('trk').textContent = s.trunks ?? '—';
-      document.getElementById('objk').textContent = s.desk_mode ? 'Pens' : 'Trunks';
+      document.getElementById('objk').textContent = 'Trunks';
       const lb = s.lightbar || 0;
       [...bar.children].forEach(el => {
         const i = Number(el.dataset.i);
@@ -120,7 +120,7 @@ INDEX_HTML = """<!doctype html>
         if (lb < 0 && i > 0 && i <= -lb) el.classList.add('on','right');
       });
       const mode = document.getElementById('mode');
-      mode.textContent = s.desk_mode ? 'D455  ·  TWO PENS' : ((s.source === 'realsense') ? 'D455 LIVE' : 'SIMULATOR  ·  GNSS DEGRADED');
+      mode.textContent = (s.source === 'realsense') ? 'D455 LIVE' : 'SIMULATOR  ·  GNSS DEGRADED';
       mode.className = 'badge' + (s.confidence > 0.5 ? ' ok' : '');
     }
     async function post(url, body) {
@@ -166,9 +166,8 @@ def _loop() -> None:
             if now - last_print >= _cfg.print_period_s:
                 last_print = now
                 lat = "—" if out.lateral_error_m is None else f"{out.lateral_error_m:+.2f}"
-                note = ",".join(out.notes) if out.notes else ""
                 print(
-                    f"LIVE {out.hint:6}  lat={lat}  pens={out.trunks}  conf={out.confidence:.2f}  {note}",
+                    f"LIVE {out.hint:6}  lat={lat}  trunks={out.trunks}  conf={out.confidence:.2f}",
                     flush=True,
                 )
         elapsed = now - t0
@@ -246,10 +245,7 @@ def main() -> None:
         _source_obj = RealSenseSource(bag_path=args.bag, config=_cfg)
         _pipeline = GuidancePipeline(_cfg, source_name="realsense")
     threading.Thread(target=_loop, daemon=True).start()
-    mode = "pens" if _cfg.desk_mode else args.source
-    print(f"Dashboard: http://127.0.0.1:{args.port}  source={mode}  print every {_cfg.print_period_s:.2f}s")
-    if _cfg.desk_mode:
-        print("Hold one pen left and one pen right, 0.4–1.5 m in front of the camera. Positive lat = you are right of the gap → STEER LEFT.")
+    print(f"Dashboard: http://127.0.0.1:{args.port}  source={args.source}  print every {_cfg.print_period_s:.2f}s")
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
 
 

@@ -77,7 +77,7 @@ def _birdseye(perc, config, h=480, w=280):
     for t in perc.trunks:
         cv2.circle(img, to_pix(t.x_m, t.z_m), 6, (40, 90, 200) if t.side == "left" else (200, 140, 40), -1)
     cv2.circle(img, to_pix(0.0, 0.2), 7, (0, 255, 255), -1)
-    label = "BEV  pens (camera at bottom)" if config.desk_mode else "BEV  (camera at bottom)"
+    label = "BEV  (camera at bottom)"
     cv2.putText(img, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 200, 180), 1)
     return img
 
@@ -112,9 +112,8 @@ def annotate(frame: Frame, perc: RowPerception, out: GuidanceOutput, config: Gui
     lat = "—" if out.lateral_error_m is None else f"{out.lateral_error_m:+.2f} m"
     hdg = "—" if out.heading_error_deg is None else f"{out.heading_error_deg:+.1f} deg"
     spd = "—" if out.speed_mps is None else f"{out.speed_mps:.2f} m/s"
-    obj = "pens" if config.desk_mode else "trunks"
     cv2.putText(rgb, f"lat {lat}   yaw {hdg}", (24, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-    cv2.putText(rgb, f"speed {spd}   {obj} {out.trunks}", (24, 106), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
+    cv2.putText(rgb, f"speed {spd}   trunks {out.trunks}", (24, 106), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
     bev = _birdseye(perc, config, h=rgb.shape[0], w=280)
     depth = cv2.resize(_depth_color(frame.depth_m, 2.5 if config.desk_mode else 16.0), (280, rgb.shape[0] // 2))
     combo_r = np.vstack([bev[: rgb.shape[0] // 2], depth])
