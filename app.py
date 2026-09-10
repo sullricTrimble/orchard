@@ -225,14 +225,15 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--row-width", type=float, default=None)
     parser.add_argument("--tree-spacing", type=float, default=None)
-    parser.add_argument("--pens", action="store_true", help="Desk mode: steer between two pens held in front of the D455")
+    parser.add_argument("--close-range", action="store_true", help="Near-field lock: two compact objects, one on each side")
+    parser.add_argument("--pens", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--print-period", type=float, default=None, help="Seconds between readable LIVE lines (default 0.75)")
     args = parser.parse_args()
     if args.row_width:
         _cfg.row_width_m = args.row_width
     if args.tree_spacing:
         _cfg.tree_spacing_m = args.tree_spacing
-    if args.pens:
+    if args.close_range or args.pens:
         _cfg.apply_desk_pens()
     if args.print_period is not None:
         _cfg.print_period_s = max(0.15, args.print_period)

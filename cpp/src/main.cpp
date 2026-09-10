@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
         else if (arg_eq(argv[i],"--no-gui")) gui=false;
         else if (arg_eq(argv[i],"--frames") && i+1<argc) max_frames=atoi(argv[++i]);
         else if (arg_eq(argv[i],"--http")) http_port=(i+1<argc && argv[i+1][0]!='-') ? atoi(argv[++i]) : 8080;
-        else if (arg_eq(argv[i],"--pens")) cfg.apply_desk_pens();
+        else if (arg_eq(argv[i],"--close-range") || arg_eq(argv[i],"--pens")) cfg.apply_desk_pens();
         else if (arg_eq(argv[i],"--row-width") && i+1<argc) cfg.row_width_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--tree-spacing") && i+1<argc) cfg.tree_spacing_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--trunk-min") && i+1<argc) cfg.trunk_height_min_m=(float)atof(argv[++i]);
