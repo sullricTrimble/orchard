@@ -36,6 +36,7 @@ class GuidanceOutput:
     vanishing_point: Optional[tuple[float, float]]
     notes: list[str]
     source: str
+    desk_mode: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -60,9 +61,12 @@ class GuidancePipeline:
 
     def process(self, frame: Frame) -> GuidanceOutput:
         perc = perceive(frame, self.config)
-        self._lat = _smooth(self._lat, perc.lateral_error_m, 0.35)
-        hdg = None if perc.heading_error_rad is None else float(perc.heading_error_rad)
-        self._hdg = _smooth(self._hdg, hdg, 0.35)
+        if perc.lateral_error_m is None and self.config.desk_mode:
+            self._lat = self._hdg = None
+        else:
+            self._lat = _smooth(self._lat, perc.lateral_error_m, 0.35)
+            hdg = None if perc.heading_error_rad is None else float(perc.heading_error_rad)
+            self._hdg = _smooth(self._hdg, hdg, 0.35)
         perc.lateral_error_m = self._lat
         perc.heading_error_rad = self._hdg
         cmd = compute_steer(perc, self.config)
@@ -85,6 +89,7 @@ class GuidancePipeline:
             vanishing_point=perc.vanishing_point_uv,
             notes=list(perc.notes),
             source=self.source_name,
+            desk_mode=self.config.desk_mode,
         )
         self.last_output = out
         return out

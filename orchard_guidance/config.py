@@ -50,6 +50,32 @@ class GuidanceConfig:
 
     extra: dict = field(default_factory=dict)
 
+    # Desk bring-up: two pens held in front of the D455 instead of orchard trunks.
+    desk_mode: bool = False
+    desk_depth_min_m: float = 0.30
+    desk_depth_max_m: float = 2.20
+    desk_y_band_m: float = 0.28
+    desk_cluster_eps_m: float = 0.09
+    desk_cluster_min_points: int = 12
+    desk_max_span_m: float = 0.22
+    desk_min_vertical_m: float = 0.05
+    desk_min_gap_m: float = 0.08
+    desk_max_gap_m: float = 1.20
+    desk_max_lat_m: float = 0.45
+    print_period_s: float = 0.75
+
     @property
     def camera_pitch_rad(self) -> float:
         return float(self.camera_pitch_deg) * 3.141592653589793 / 180.0
+
+    def apply_desk_pens(self) -> "GuidanceConfig":
+        """Tune knobs so two handheld pens read as the left/right alley edges."""
+        self.desk_mode = True
+        self.camera_pitch_deg = 0.0
+        self.lightbar_full_scale_m = 0.20
+        self.deadband_m = 0.03
+        self.kp_lateral = 1.20
+        self.kp_heading = 0.0
+        self.depth_min_m = self.desk_depth_min_m
+        self.depth_max_m = self.desk_depth_max_m
+        return self

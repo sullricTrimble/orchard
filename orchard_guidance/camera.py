@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Protocol
 
+import cv2
 import numpy as np
 
 from .config import GuidanceConfig
@@ -35,14 +36,13 @@ class RealSenseSource:
         if bag_path:
             cfg.enable_device_from_file(bag_path, repeat_playback=True)
         else:
-            cfg.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
-            cfg.enable_stream(rs.stream.color, 848, 480, rs.format.bgr8, 30)
-        self._align = rs.align(rs.stream.color)
+            cfg.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 15)
+            cfg.enable_stream(rs.stream.color, 848, 480, rs.format.bgr8, 15)
         profile = self._pipeline.start(cfg)
         depth_sensor = profile.get_device().first_depth_sensor()
         self._scale = float(depth_sensor.get_depth_scale())
-        color_stream = profile.get_stream(rs.stream.color).as_video_stream_profile()
-        intr = color_stream.get_intrinsics()
+        depth_stream = profile.get_stream(rs.stream.depth).as_video_stream_profile()
+        intr = depth_stream.get_intrinsics()
         self.intrinsics = Intrinsics(
             fx=float(intr.fx),
             fy=float(intr.fy),
@@ -55,14 +55,20 @@ class RealSenseSource:
 
     def read(self) -> Optional[Frame]:
         frames = self._pipeline.wait_for_frames()
-        aligned = self._align.process(frames)
-        depth = aligned.get_depth_frame()
-        color = aligned.get_color_frame()
-        if not depth or not color:
+        depth = frames.get_depth_frame()
+        color = frames.get_color_frame()
+        if not depth:
             return None
-        rgb = np.asanyarray(color.get_data())
         depth_m = np.asanyarray(depth.get_data()).astype(np.float32) * self._scale
-        ts = float(color.get_timestamp()) / 1000.0
+        if float(np.max(depth_m)) <= 0:
+            return None
+        if color:
+            rgb = np.asanyarray(color.get_data())
+            if rgb.shape[0] != depth_m.shape[0] or rgb.shape[1] != depth_m.shape[1]:
+                rgb = cv2.resize(rgb, (depth_m.shape[1], depth_m.shape[0]))
+        else:
+            rgb = np.zeros((depth_m.shape[0], depth_m.shape[1], 3), np.uint8)
+        ts = float(depth.get_timestamp()) / 1000.0
         if self._t0 is None:
             self._t0 = ts
         return Frame(rgb=rgb, depth_m=depth_m, intrinsics=self.intrinsics, timestamp_s=ts - self._t0)

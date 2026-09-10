@@ -77,7 +77,7 @@ INDEX_HTML = """<!doctype html>
         <div class="metric"><div class="k">Speed</div><div class="v" id="spd">—</div></div>
         <div class="metric"><div class="k">Confidence</div><div class="v" id="conf">—</div></div>
         <div class="metric"><div class="k">Spacing</div><div class="v" id="spc">—</div></div>
-        <div class="metric"><div class="k">Trunks</div><div class="v" id="trk">—</div></div>
+        <div class="metric"><div class="k" id="objk">Trunks</div><div class="v" id="trk">—</div></div>
       </div>
       <div class="row">
         <button onclick="post('/api/auto', {on:true})">Auto drive</button>
@@ -89,7 +89,7 @@ INDEX_HTML = """<!doctype html>
       </div>
     </aside>
   </main>
-  <footer>Positive lateral = tractor is right of the row center (steer left). Speed uses tracked trunks plus planted tree spacing.</footer>
+  <footer>Positive lateral = you are right of the gap (steer LEFT). Hold one pen on each side, 0.4–1.5 m in front of the camera.</footer>
   <script>
     const half = 5;
     const bar = document.getElementById('bar');
@@ -110,6 +110,7 @@ INDEX_HTML = """<!doctype html>
       document.getElementById('conf').textContent = fmt((s.confidence||0)*100, ' %', 0);
       document.getElementById('spc').textContent = fmt(s.measured_spacing_m, ' m');
       document.getElementById('trk').textContent = s.trunks ?? '—';
+      document.getElementById('objk').textContent = s.desk_mode ? 'Pens' : 'Trunks';
       const lb = s.lightbar || 0;
       [...bar.children].forEach(el => {
         const i = Number(el.dataset.i);
@@ -119,13 +120,13 @@ INDEX_HTML = """<!doctype html>
         if (lb < 0 && i > 0 && i <= -lb) el.classList.add('on','right');
       });
       const mode = document.getElementById('mode');
-      mode.textContent = (s.source === 'realsense') ? 'D455 LIVE' : 'SIMULATOR  ·  GNSS DEGRADED';
+      mode.textContent = s.desk_mode ? 'D455  ·  TWO PENS' : ((s.source === 'realsense') ? 'D455 LIVE' : 'SIMULATOR  ·  GNSS DEGRADED');
       mode.className = 'badge' + (s.confidence > 0.5 ? ' ok' : '');
     }
     async function post(url, body) {
       await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     }
-    setInterval(tick, 200); tick();
+    setInterval(tick, 400); tick();
   </script>
 </body>
 </html>
@@ -141,6 +142,7 @@ def _loop() -> None:
     global _jpeg, _state
     assert _pipeline is not None
     dt = 1.0 / _cfg.sim_fps
+    last_print = 0.0
     while not _stop:
         t0 = time.time()
         if _sim is not None:
@@ -159,7 +161,17 @@ def _loop() -> None:
             _state = out.to_dict()
         if _sim is not None and _sim.auto_drive:
             _sim.apply_steer(out.steer)
-        elapsed = time.time() - t0
+        now = time.time()
+        if _source == "realsense" or _cfg.desk_mode:
+            if now - last_print >= _cfg.print_period_s:
+                last_print = now
+                lat = "—" if out.lateral_error_m is None else f"{out.lateral_error_m:+.2f}"
+                note = ",".join(out.notes) if out.notes else ""
+                print(
+                    f"LIVE {out.hint:6}  lat={lat}  pens={out.trunks}  conf={out.confidence:.2f}  {note}",
+                    flush=True,
+                )
+        elapsed = now - t0
         if _sim is not None:
             time.sleep(max(0.0, dt - elapsed))
 
@@ -214,11 +226,17 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--row-width", type=float, default=None)
     parser.add_argument("--tree-spacing", type=float, default=None)
+    parser.add_argument("--pens", action="store_true", help="Desk mode: steer between two pens held in front of the D455")
+    parser.add_argument("--print-period", type=float, default=None, help="Seconds between readable LIVE lines (default 0.75)")
     args = parser.parse_args()
     if args.row_width:
         _cfg.row_width_m = args.row_width
     if args.tree_spacing:
         _cfg.tree_spacing_m = args.tree_spacing
+    if args.pens:
+        _cfg.apply_desk_pens()
+    if args.print_period is not None:
+        _cfg.print_period_s = max(0.15, args.print_period)
     _source = args.source
     if args.source == "sim":
         _sim = OrchardSimulator(_cfg)
@@ -228,7 +246,10 @@ def main() -> None:
         _source_obj = RealSenseSource(bag_path=args.bag, config=_cfg)
         _pipeline = GuidancePipeline(_cfg, source_name="realsense")
     threading.Thread(target=_loop, daemon=True).start()
-    print(f"Dashboard: http://{args.host}:{args.port}  source={args.source}")
+    mode = "pens" if _cfg.desk_mode else args.source
+    print(f"Dashboard: http://127.0.0.1:{args.port}  source={mode}  print every {_cfg.print_period_s:.2f}s")
+    if _cfg.desk_mode:
+        print("Hold one pen left and one pen right, 0.4–1.5 m in front of the camera. Positive lat = you are right of the gap → STEER LEFT.")
     app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
 
 

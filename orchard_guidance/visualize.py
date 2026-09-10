@@ -41,18 +41,28 @@ def _depth_color(depth, max_m=16.0):
     return color
 
 
+def _project_cam(x, y, z, frame):
+    u, v = frame.intrinsics.cam_to_pixel(
+        np.array([x], np.float32), np.array([y], np.float32), np.array([z], np.float32)
+    )
+    if not np.isfinite(u[0]) or not np.isfinite(v[0]):
+        return None
+    return int(round(u[0])), int(round(v[0]))
+
+
 def _birdseye(perc, config, h=480, w=280):
     img = np.zeros((h, w, 3), dtype=np.uint8)
     img[:] = (18, 22, 20)
-    z_max, x_max = 14.0, 4.0
+    z_max, x_max = (2.4, 0.70) if config.desk_mode else (14.0, 4.0)
 
     def to_pix(x, z):
         return int((x / x_max * 0.5 + 0.5) * (w - 1)), int((1.0 - z / z_max) * (h - 1))
 
     cv2.line(img, to_pix(0, 0), to_pix(0, z_max), (50, 60, 50), 1)
-    for z in (4, 8, 12):
+    ticks = (0.6, 1.2, 1.8) if config.desk_mode else (4, 8, 12)
+    for z in ticks:
         cv2.line(img, to_pix(-x_max, z), to_pix(x_max, z), (40, 45, 40), 1)
-        cv2.putText(img, f"{z}m", to_pix(-x_max + 0.15, z + 0.2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 100, 90), 1)
+        cv2.putText(img, f"{z}m", to_pix(-x_max + 0.04, z + 0.08), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 100, 90), 1)
 
     def polyl(line, color):
         pts = [to_pix(line.x_at(z), z) for z in np.linspace(1.0, z_max, 10)]
@@ -67,7 +77,8 @@ def _birdseye(perc, config, h=480, w=280):
     for t in perc.trunks:
         cv2.circle(img, to_pix(t.x_m, t.z_m), 6, (40, 90, 200) if t.side == "left" else (200, 140, 40), -1)
     cv2.circle(img, to_pix(0.0, 0.2), 7, (0, 255, 255), -1)
-    cv2.putText(img, "BEV  (camera at bottom)", (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 200, 180), 1)
+    label = "BEV  pens (camera at bottom)" if config.desk_mode else "BEV  (camera at bottom)"
+    cv2.putText(img, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 200, 180), 1)
     return img
 
 
@@ -86,19 +97,26 @@ def annotate(frame: Frame, perc: RowPerception, out: GuidanceOutput, config: Gui
     cx = int(frame.intrinsics.cx)
     cv2.line(rgb, (cx, 0), (cx, rgb.shape[0] - 1), (255, 255, 255), 1)
     for t in perc.trunks:
-        p = _project_ground(t.x_m, t.z_m, 0.8, frame, config)
+        if t.u is not None and t.v is not None:
+            p = (int(round(t.u)), int(round(t.v)))
+        elif config.desk_mode:
+            p = _project_cam(t.x_m, 0.0, t.z_m, frame)
+        else:
+            p = _project_ground(t.x_m, t.z_m, 0.8, frame, config)
         if p is not None:
-            cv2.circle(rgb, p, 7, (0, 80, 255), 2)
+            cv2.circle(rgb, p, 10, (0, 80, 255), 2)
+            cv2.putText(rgb, t.side[0].upper(), (p[0] + 12, p[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 80, 255), 2)
     color = {"LEFT": (80, 180, 255), "RIGHT": (80, 180, 255), "CENTER": (60, 220, 90), "HOLD": (80, 80, 80)}.get(out.hint, (200, 200, 200))
-    cv2.rectangle(rgb, (12, 12), (360, 118), (0, 0, 0), -1)
+    cv2.rectangle(rgb, (12, 12), (420, 118), (0, 0, 0), -1)
     cv2.putText(rgb, f"STEER {out.hint}", (24, 52), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3)
     lat = "—" if out.lateral_error_m is None else f"{out.lateral_error_m:+.2f} m"
     hdg = "—" if out.heading_error_deg is None else f"{out.heading_error_deg:+.1f} deg"
     spd = "—" if out.speed_mps is None else f"{out.speed_mps:.2f} m/s"
+    obj = "pens" if config.desk_mode else "trunks"
     cv2.putText(rgb, f"lat {lat}   yaw {hdg}", (24, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-    cv2.putText(rgb, f"speed {spd}   trunks {out.trunks}", (24, 106), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
+    cv2.putText(rgb, f"speed {spd}   {obj} {out.trunks}", (24, 106), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
     bev = _birdseye(perc, config, h=rgb.shape[0], w=280)
-    depth = cv2.resize(_depth_color(frame.depth_m), (280, rgb.shape[0] // 2))
+    depth = cv2.resize(_depth_color(frame.depth_m, 2.5 if config.desk_mode else 16.0), (280, rgb.shape[0] // 2))
     combo_r = np.vstack([bev[: rgb.shape[0] // 2], depth])
     if combo_r.shape[0] != rgb.shape[0]:
         combo_r = cv2.resize(combo_r, (280, rgb.shape[0]))

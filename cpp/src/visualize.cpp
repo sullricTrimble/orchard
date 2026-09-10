@@ -24,7 +24,14 @@ cv::Mat annotate(const Frame& frame, const RowPerception& perc, const SteerComma
     if (perc.left_line) drawl(*perc.left_line,{80,180,255});
     if (perc.right_line) drawl(*perc.right_line,{80,180,255});
     if (perc.centerline) drawl(*perc.centerline,{60,220,90},0.2f);
-    cv::Scalar color = cmd.hint=="CENTER" ? cv::Scalar(60,220,90) : cv::Scalar(80,180,255);
+    if (cfg.desk_mode) {
+        for (const auto& t: perc.trunks) {
+            float u,v;
+            if (frame.K.cam_to_pixel(t.x_m, 0.f, t.z_m, u, v))
+                cv::circle(rgb, {(int)std::lround(u),(int)std::lround(v)}, 10, {0,80,255}, 2);
+        }
+    }
+    cv::Scalar color = cmd.hint=="HOLD" ? cv::Scalar(80,80,80) : (cmd.hint=="CENTER" ? cv::Scalar(60,220,90) : cv::Scalar(80,180,255));
     cv::rectangle(rgb,{12,12},{420,118},{0,0,0},cv::FILLED);
     cv::putText(rgb,"STEER "+cmd.hint,{24,52},cv::FONT_HERSHEY_SIMPLEX,1.1,color,3);
     std::ostringstream ss; ss.setf(std::ios::fixed); ss.precision(2);

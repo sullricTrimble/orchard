@@ -143,7 +143,104 @@ def _plausible_vp(vp, width, height):
     return (0.18 * width) < u < (0.82 * width) and (-0.15 * height) < v < (0.62 * height)
 
 
+def _cluster_pens(xs, ys, zs, eps, min_pts):
+    n = xs.size
+    if n == 0:
+        return []
+    used = np.zeros(n, dtype=bool)
+    out = []
+    for i in np.argsort(zs):
+        if used[i]:
+            continue
+        dist2 = (xs - xs[i]) ** 2 + (zs - zs[i]) ** 2
+        members = dist2 < eps * eps
+        count = int(members.sum())
+        if count < min_pts:
+            continue
+        used[members] = True
+        mx, my, mz = float(xs[members].mean()), float(ys[members].mean()), float(zs[members].mean())
+        xz_span = float(np.hypot(xs[members].max() - xs[members].min(), zs[members].max() - zs[members].min()))
+        y_span = float(ys[members].max() - ys[members].min())
+        out.append((mx, my, mz, count, xz_span, y_span))
+    return out
+
+
+def perceive_pens(frame: Frame, config: GuidanceConfig) -> RowPerception:
+    """Lock onto two compact nearby objects (pens) and steer between them."""
+    result = RowPerception()
+    depth = frame.depth_m
+    k = frame.intrinsics
+    z0, z1 = config.desk_depth_min_m, config.desk_depth_max_m
+    valid = (depth > z0) & (depth < z1)
+    if int(valid.sum()) < 40:
+        result.notes.append("too_few_depth_pixels")
+        return result
+
+    vv, uu = np.indices(depth.shape)
+    z = depth[valid]
+    x, y_down, z = k.pixel_to_cam(uu[valid].astype(np.float32), vv[valid].astype(np.float32), z)
+    band = np.abs(y_down) <= config.desk_y_band_m
+    x, y_down, z = x[band], y_down[band], z[band]
+    if x.size < 20:
+        result.notes.append("no_pen_band")
+        return result
+
+    clusters = []
+    for mx, my, mz, n, xz_span, y_span in _cluster_pens(
+        x, y_down, z, config.desk_cluster_eps_m, config.desk_cluster_min_points
+    ):
+        if xz_span > config.desk_max_span_m:
+            continue
+        if y_span < config.desk_min_vertical_m and n < config.desk_cluster_min_points * 3:
+            continue
+        clusters.append((mx, my, mz, n))
+
+    left = [c for c in clusters if c[0] < -0.02]
+    right = [c for c in clusters if c[0] > 0.02]
+    left.sort(key=lambda c: c[2])
+    right.sort(key=lambda c: c[2])
+    if not left:
+        result.notes.append("left_pen_missing")
+    if not right:
+        result.notes.append("right_pen_missing")
+    if not left or not right:
+        result.notes.append("need_both_pens")
+        return result
+
+    lx, ly, lz, ln = left[0]
+    rx, ry, rz, rn = right[0]
+    gap = rx - lx
+    if gap < config.desk_min_gap_m or gap > config.desk_max_gap_m:
+        result.notes.append("pen_gap_rejected")
+        return result
+
+    center_x = 0.5 * (lx + rx)
+    lat = -center_x
+    if abs(lat) > config.desk_max_lat_m:
+        result.notes.append("lat_rejected")
+        return result
+
+    result.left_line = LineXZ(intercept=lx, slope=0.0)
+    result.right_line = LineXZ(intercept=rx, slope=0.0)
+    result.centerline = LineXZ(intercept=center_x, slope=0.0)
+    result.lateral_error_m = float(lat)
+    result.heading_error_rad = 0.0
+    result.row_width_m = float(gap)
+    result.depth_range_m = float(max(lz, rz))
+    lu, lv = k.cam_to_pixel(np.array([lx]), np.array([ly]), np.array([lz]))
+    ru, rv = k.cam_to_pixel(np.array([rx]), np.array([ry]), np.array([rz]))
+    result.trunks = [
+        Trunk(side="left", x_m=float(lx), z_m=float(lz), u=float(lu[0]), v=float(lv[0]), n_points=int(ln)),
+        Trunk(side="right", x_m=float(rx), z_m=float(rz), u=float(ru[0]), v=float(rv[0]), n_points=int(rn)),
+    ]
+    result.confidence = 0.85 if abs(lat) < 0.15 else 0.70
+    result.notes.append("desk_pens")
+    return result
+
+
 def perceive(frame: Frame, config: GuidanceConfig) -> RowPerception:
+    if config.desk_mode:
+        return perceive_pens(frame, config)
     result = RowPerception()
     depth = frame.depth_m
     k = frame.intrinsics
