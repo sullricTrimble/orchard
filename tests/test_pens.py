@@ -43,10 +43,28 @@ def test_two_pens_right_of_gap_steers_left():
     assert out.hint == "LEFT"
 
 
+def test_confidence_tracks_lock_quality_not_centering():
+    cfg = _cfg()
+    clean = perceive(_pen_frame(-0.16, 0.16, z=0.70), cfg)
+    # One pen farther away: rewrite right column depths.
+    frame = _pen_frame(-0.16, 0.16, z=0.70)
+    k = frame.intrinsics
+    z_far = 1.05
+    u0 = int(round(k.fx * 0.16 / 0.70 + k.cx))
+    frame.depth_m[:, max(0, u0 - 8) : u0 + 9] = np.where(
+        frame.depth_m[:, max(0, u0 - 8) : u0 + 9] > 0, z_far, 0
+    )
+    staggered = perceive(frame, cfg)
+    assert clean.confidence is not None and clean.confidence > 0.5
+    assert staggered.lateral_error_m is not None
+    assert staggered.confidence < clean.confidence - 0.05
+    assert abs(clean.confidence - 0.85) > 0.001
+
+
 def test_one_pen_holds():
     cfg = _cfg()
     frame = _pen_frame(-0.20, 0.20)
     frame.depth_m[:, frame.depth_m.shape[1] // 2 :] = 0
     perc = perceive(frame, cfg)
     assert perc.lateral_error_m is None
-    assert "need_both_pens" in perc.notes
+    assert "need_both" in perc.notes

@@ -3,6 +3,7 @@
 #include "orchard/perception.hpp"
 #include "orchard/synthetic.hpp"
 #include "orchard/velocity.hpp"
+#include "orchard/preview_server.hpp"
 #include "orchard/visualize.hpp"
 #include <chrono>
 #include <cmath>
@@ -26,20 +27,20 @@ static void print_live(const SteerCommand& cmd, const RowPerception& perc) {
     std::cout << "  lat=";
     if (cmd.lateral_error_m) std::cout << (*cmd.lateral_error_m >= 0 ? "+" : "") << *cmd.lateral_error_m;
     else std::cout << "--";
-    std::cout << "  pens=" << perc.trunks.size();
+    std::cout << "  trunks=" << perc.trunks.size();
     std::cout << "  conf=" << perc.confidence;
-    for (const auto& n : perc.notes) std::cout << "  " << n;
     std::cout << "\n";
 }
 
 int main(int argc, char** argv) {
-    std::string source="sim"; bool gui=false; int max_frames=90;
+    std::string source="sim"; bool gui=false; int max_frames=90; int http_port=0;
     Config cfg;
     for (int i=1;i<argc;++i) {
         if (arg_eq(argv[i],"--source") && i+1<argc) source=argv[++i];
         else if (arg_eq(argv[i],"--gui")) gui=true;
         else if (arg_eq(argv[i],"--no-gui")) gui=false;
         else if (arg_eq(argv[i],"--frames") && i+1<argc) max_frames=atoi(argv[++i]);
+        else if (arg_eq(argv[i],"--http")) http_port=(i+1<argc && argv[i+1][0]!='-') ? atoi(argv[++i]) : 8080;
         else if (arg_eq(argv[i],"--pens")) cfg.apply_desk_pens();
         else if (arg_eq(argv[i],"--row-width") && i+1<argc) cfg.row_width_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--tree-spacing") && i+1<argc) cfg.tree_spacing_m=(float)atof(argv[++i]);
@@ -47,6 +48,11 @@ int main(int argc, char** argv) {
         else if (arg_eq(argv[i],"--trunk-max") && i+1<argc) cfg.trunk_height_max_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--camera-height") && i+1<argc) cfg.camera_height_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--print-period") && i+1<argc) cfg.print_period_s=(float)atof(argv[++i]);
+    }
+    PreviewServer preview(http_port);
+    if (http_port > 0) {
+        if (preview.ok()) std::cout << "Preview: http://0.0.0.0:" << http_port << "  (open this Pi's IP from your PC)\n";
+        else std::cerr << "Preview server failed to start on port " << http_port << "\n";
     }
     if (source=="sim") {
         auto world=build_world(cfg); TractorPose pose; pose.x_m=0.65f; pose.yaw_rad=7.f*0.0174533f; pose.s_m=6.f;
@@ -56,7 +62,8 @@ int main(int argc, char** argv) {
             Frame frame=render_frame(world,pose,cfg,t);
             auto perc=perceive(frame,cfg); auto cmd=compute_steer(perc,cfg); auto speed=vel.update(perc.trunks,t);
             auto vis=annotate(frame,perc,cmd,speed,cfg);
-            if (gui) { cv::imshow("Orchard", vis); if (cv::waitKey(1)==27) break; }
+            preview.publish(vis);
+            if (gui) { cv::imshow("Guidance", vis); if (cv::waitKey(1)==27) break; }
             auto now=std::chrono::steady_clock::now();
             if (std::chrono::duration<float>(now-last_print).count()>=cfg.print_period_s) {
                 print_live(cmd, perc);
@@ -100,7 +107,8 @@ int main(int argc, char** argv) {
             }
             auto perc=perceive(frame,cfg); auto cmd=compute_steer(perc,cfg);
             auto vis=annotate(frame,perc,cmd,vel.update(perc.trunks,0),cfg);
-            if (gui) { cv::imshow("Orchard", vis); if (cv::waitKey(1)==27) break; }
+            preview.publish(vis);
+            if (gui) { cv::imshow("Guidance", vis); if (cv::waitKey(1)==27) break; }
             auto now=std::chrono::steady_clock::now();
             if (std::chrono::duration<float>(now-last_print).count()>=cfg.print_period_s) {
                 print_live(cmd, perc);

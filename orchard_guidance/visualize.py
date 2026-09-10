@@ -1,123 +1,108 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import cv2
 import numpy as np
 
 from .config import GuidanceConfig
-from .geometry import ground_to_camera
+from .geometry import camera_points_to_ground, ground_to_camera
 from .pipeline import GuidanceOutput
-from .types import Frame, LineXZ, RowPerception
+from .types import Frame, RowPerception
 
 
-def _project_ground(x, z, height, frame, config):
-    cx, cy, cz = ground_to_camera(
-        np.array([x], np.float32), np.array([height], np.float32), np.array([z], np.float32),
-        config.camera_pitch_rad, config.camera_height_m,
-    )
-    if cz[0] < 0.4:
-        return None
-    u, v = frame.intrinsics.cam_to_pixel(cx, cy, cz)
-    if not np.isfinite(u[0]) or not np.isfinite(v[0]):
-        return None
-    return int(round(u[0])), int(round(v[0]))
+def _hint_color(hint: str):
+    if hint == "CENTER":
+        return (60, 220, 90)
+    if hint == "HOLD":
+        return (90, 90, 90)
+    return (80, 180, 255)
 
 
-def _draw_line_xz(img, line, frame, config, color, height=0.9):
-    pts = []
-    for z in np.linspace(1.6, 18.0, 12):
-        p = _project_ground(line.x_at(float(z)), float(z), height, frame, config)
-        if p is not None:
-            pts.append(p)
-    for a, b in zip(pts, pts[1:]):
-        cv2.line(img, a, b, color, 2, cv2.LINE_AA)
-
-
-def _depth_color(depth, max_m=16.0):
-    vis = np.clip(depth / max_m, 0, 1)
-    color = cv2.applyColorMap((vis * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
-    color[depth <= 0] = 0
-    return color
-
-
-def _project_cam(x, y, z, frame):
-    u, v = frame.intrinsics.cam_to_pixel(
-        np.array([x], np.float32), np.array([y], np.float32), np.array([z], np.float32)
-    )
-    if not np.isfinite(u[0]) or not np.isfinite(v[0]):
-        return None
-    return int(round(u[0])), int(round(v[0]))
-
-
-def _birdseye(perc, config, h=480, w=280):
-    img = np.zeros((h, w, 3), dtype=np.uint8)
-    img[:] = (18, 22, 20)
-    z_max, x_max = (2.4, 0.70) if config.desk_mode else (14.0, 4.0)
-
-    def to_pix(x, z):
-        return int((x / x_max * 0.5 + 0.5) * (w - 1)), int((1.0 - z / z_max) * (h - 1))
-
-    cv2.line(img, to_pix(0, 0), to_pix(0, z_max), (50, 60, 50), 1)
-    ticks = (0.6, 1.2, 1.8) if config.desk_mode else (4, 8, 12)
-    for z in ticks:
-        cv2.line(img, to_pix(-x_max, z), to_pix(x_max, z), (40, 45, 40), 1)
-        cv2.putText(img, f"{z}m", to_pix(-x_max + 0.04, z + 0.08), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (90, 100, 90), 1)
-
-    def polyl(line, color):
-        pts = [to_pix(line.x_at(z), z) for z in np.linspace(1.0, z_max, 10)]
-        cv2.polylines(img, [np.array(pts, np.int32)], False, color, 2)
-
-    if perc.left_line:
-        polyl(perc.left_line, (80, 180, 255))
-    if perc.right_line:
-        polyl(perc.right_line, (80, 180, 255))
-    if perc.centerline:
-        polyl(perc.centerline, (60, 220, 80))
-    for t in perc.trunks:
-        cv2.circle(img, to_pix(t.x_m, t.z_m), 6, (40, 90, 200) if t.side == "left" else (200, 140, 40), -1)
-    cv2.circle(img, to_pix(0.0, 0.2), 7, (0, 255, 255), -1)
-    label = "BEV  pens (camera at bottom)" if config.desk_mode else "BEV  (camera at bottom)"
-    cv2.putText(img, label, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 200, 180), 1)
-    return img
-
-
-def annotate(frame: Frame, perc: RowPerception, out: GuidanceOutput, config: GuidanceConfig):
-    rgb = frame.rgb.copy()
-    if perc.left_line:
-        _draw_line_xz(rgb, perc.left_line, frame, config, (80, 180, 255))
-    if perc.right_line:
-        _draw_line_xz(rgb, perc.right_line, frame, config, (80, 180, 255))
-    if perc.centerline:
-        _draw_line_xz(rgb, perc.centerline, frame, config, (60, 220, 90), height=0.2)
-    if perc.vanishing_point_uv is not None:
-        u, v = int(perc.vanishing_point_uv[0]), int(perc.vanishing_point_uv[1])
-        cv2.drawMarker(rgb, (u, v), (0, 255, 255), cv2.MARKER_TILTED_CROSS, 22, 2)
-        cv2.circle(rgb, (u, v), 10, (0, 255, 255), 2)
-    cx = int(frame.intrinsics.cx)
-    cv2.line(rgb, (cx, 0), (cx, rgb.shape[0] - 1), (255, 255, 255), 1)
+def _silhouette(frame: Frame, perc: RowPerception, config: GuidanceConfig) -> np.ndarray:
+    depth = frame.depth_m
+    h, w = depth.shape
+    sil = np.zeros((h, w, 3), dtype=np.uint8)
+    z0 = config.desk_depth_min_m if config.desk_mode else config.depth_min_m
+    z1 = config.desk_depth_max_m if config.desk_mode else config.depth_max_m
+    valid = (depth > z0) & (depth < z1)
+    if not np.any(valid):
+        return sil
+    vv, uu = np.indices(depth.shape)
+    z = depth[valid]
+    x, y_down, z = frame.intrinsics.pixel_to_cam(uu[valid].astype(np.float32), vv[valid].astype(np.float32), z)
+    if config.desk_mode:
+        keep = np.abs(y_down) <= config.desk_y_band_m
+        xs = x[keep]
+        us = uu[valid][keep]
+        vs = vv[valid][keep]
+    else:
+        gx, agl, _gz = camera_points_to_ground(x, y_down, z, config.camera_pitch_rad, config.camera_height_m)
+        keep = (agl >= config.trunk_height_min_m) & (agl <= config.trunk_height_max_m)
+        xs = gx[keep]
+        us = uu[valid][keep]
+        vs = vv[valid][keep]
+    left_ok = perc.left_line is not None
+    right_ok = perc.right_line is not None
+    for u, v, xv in zip(us, vs, xs):
+        if xv < -0.02:
+            sil[int(v), int(u)] = (230, 220, 90) if left_ok else (90, 90, 90)
+        elif xv > 0.02:
+            sil[int(v), int(u)] = (70, 165, 255) if right_ok else (90, 90, 90)
+        else:
+            sil[int(v), int(u)] = (70, 70, 70)
+    sil = cv2.dilate(sil, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    cx = int(round(frame.intrinsics.cx))
+    cv2.line(sil, (cx, 0), (cx, h - 1), (50, 50, 50), 1)
     for t in perc.trunks:
         if t.u is not None and t.v is not None:
             p = (int(round(t.u)), int(round(t.v)))
         elif config.desk_mode:
-            p = _project_cam(t.x_m, 0.0, t.z_m, frame)
+            u, v = frame.intrinsics.cam_to_pixel(
+                np.array([t.x_m], np.float32), np.array([0.0], np.float32), np.array([t.z_m], np.float32)
+            )
+            if not np.isfinite(u[0]):
+                continue
+            p = (int(round(u[0])), int(round(v[0])))
         else:
-            p = _project_ground(t.x_m, t.z_m, 0.8, frame, config)
-        if p is not None:
-            cv2.circle(rgb, p, 10, (0, 80, 255), 2)
-            cv2.putText(rgb, t.side[0].upper(), (p[0] + 12, p[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 80, 255), 2)
-    color = {"LEFT": (80, 180, 255), "RIGHT": (80, 180, 255), "CENTER": (60, 220, 90), "HOLD": (80, 80, 80)}.get(out.hint, (200, 200, 200))
-    cv2.rectangle(rgb, (12, 12), (420, 118), (0, 0, 0), -1)
-    cv2.putText(rgb, f"STEER {out.hint}", (24, 52), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3)
-    lat = "—" if out.lateral_error_m is None else f"{out.lateral_error_m:+.2f} m"
-    hdg = "—" if out.heading_error_deg is None else f"{out.heading_error_deg:+.1f} deg"
-    spd = "—" if out.speed_mps is None else f"{out.speed_mps:.2f} m/s"
-    obj = "pens" if config.desk_mode else "trunks"
-    cv2.putText(rgb, f"lat {lat}   yaw {hdg}", (24, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-    cv2.putText(rgb, f"speed {spd}   {obj} {out.trunks}", (24, 106), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1)
-    bev = _birdseye(perc, config, h=rgb.shape[0], w=280)
-    depth = cv2.resize(_depth_color(frame.depth_m, 2.5 if config.desk_mode else 16.0), (280, rgb.shape[0] // 2))
-    combo_r = np.vstack([bev[: rgb.shape[0] // 2], depth])
-    if combo_r.shape[0] != rgb.shape[0]:
-        combo_r = cv2.resize(combo_r, (280, rgb.shape[0]))
-    return np.hstack([rgb, combo_r])
+            cx3, cy3, cz3 = ground_to_camera(
+                np.array([t.x_m], np.float32), np.array([0.8], np.float32), np.array([t.z_m], np.float32),
+                config.camera_pitch_rad, config.camera_height_m,
+            )
+            u, v = frame.intrinsics.cam_to_pixel(cx3, cy3, cz3)
+            if not np.isfinite(u[0]):
+                continue
+            p = (int(round(u[0])), int(round(v[0])))
+        ring = (230, 220, 90) if t.side == "left" else (70, 165, 255)
+        cv2.circle(sil, p, 16, ring, 2, cv2.LINE_AA)
+    return sil
+
+
+def annotate(frame: Frame, perc: RowPerception, out: GuidanceOutput, config: GuidanceConfig):
+    sil = _silhouette(frame, perc, config)
+    h, w = sil.shape[:2]
+    banner_h = 150
+    canvas = np.zeros((h + banner_h, w, 3), dtype=np.uint8)
+    canvas[:] = (8, 8, 8)
+    canvas[banner_h:] = sil
+    color = _hint_color(out.hint)
+    cv2.rectangle(canvas, (0, 0), (w, banner_h), (12, 12, 12), -1)
+    cv2.rectangle(canvas, (0, banner_h - 4), (w, banner_h), color, -1)
+    title = "<  LEFT" if out.hint == "LEFT" else ("RIGHT  >" if out.hint == "RIGHT" else out.hint)
+    ts, _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 2.2, 5)
+    cv2.putText(canvas, title, ((w - ts[0]) // 2, 78), cv2.FONT_HERSHEY_SIMPLEX, 2.2, color, 5, cv2.LINE_AA)
+    half, cell_w, cell_h, gap = 5, 28, 22, 6
+    bar_w = 11 * cell_w + 10 * gap
+    x0, y0 = (w - bar_w) // 2, 104
+    for i in range(-half, half + 1):
+        x = x0 + (i + half) * (cell_w + gap)
+        on = i == 0 and out.hint == "CENTER"
+        if out.lightbar > 0 and i < 0 and i >= -out.lightbar:
+            on = True
+        if out.lightbar < 0 and i > 0 and i <= -out.lightbar:
+            on = True
+        fill = (60, 220, 90) if on and i == 0 else (color if on else (28, 28, 28))
+        cv2.rectangle(canvas, (x, y0), (x + cell_w, y0 + cell_h), fill, -1)
+        cv2.rectangle(canvas, (x, y0), (x + cell_w, y0 + cell_h), (50, 50, 50), 1)
+    lat = "--" if out.lateral_error_m is None else f"{out.lateral_error_m:+.2f} m"
+    line = f"lat {lat}   trunks {out.trunks}   conf {out.confidence:.2f}"
+    cv2.putText(canvas, line, (16, banner_h + h - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1, cv2.LINE_AA)
+    return canvas

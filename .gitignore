@@ -8,3 +8,10 @@ venv/
 *.png
 .coverage
 cpp/build/
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb

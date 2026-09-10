@@ -182,7 +182,7 @@ def perceive_pens(frame: Frame, config: GuidanceConfig) -> RowPerception:
     band = np.abs(y_down) <= config.desk_y_band_m
     x, y_down, z = x[band], y_down[band], z[band]
     if x.size < 20:
-        result.notes.append("no_pen_band")
+        result.notes.append("no_band")
         return result
 
     clusters = []
@@ -193,25 +193,25 @@ def perceive_pens(frame: Frame, config: GuidanceConfig) -> RowPerception:
             continue
         if y_span < config.desk_min_vertical_m and n < config.desk_cluster_min_points * 3:
             continue
-        clusters.append((mx, my, mz, n))
+        clusters.append((mx, my, mz, n, xz_span, y_span))
 
     left = [c for c in clusters if c[0] < -0.02]
     right = [c for c in clusters if c[0] > 0.02]
     left.sort(key=lambda c: c[2])
     right.sort(key=lambda c: c[2])
     if not left:
-        result.notes.append("left_pen_missing")
+        result.notes.append("left_missing")
     if not right:
-        result.notes.append("right_pen_missing")
+        result.notes.append("right_missing")
     if not left or not right:
-        result.notes.append("need_both_pens")
+        result.notes.append("need_both")
         return result
 
-    lx, ly, lz, ln = left[0]
-    rx, ry, rz, rn = right[0]
+    lx, ly, lz, ln, lspan, _lyspan = left[0]
+    rx, ry, rz, rn, rspan, _ryspan = right[0]
     gap = rx - lx
     if gap < config.desk_min_gap_m or gap > config.desk_max_gap_m:
-        result.notes.append("pen_gap_rejected")
+        result.notes.append("gap_rejected")
         return result
 
     center_x = 0.5 * (lx + rx)
@@ -233,9 +233,21 @@ def perceive_pens(frame: Frame, config: GuidanceConfig) -> RowPerception:
         Trunk(side="left", x_m=float(lx), z_m=float(lz), u=float(lu[0]), v=float(lv[0]), n_points=int(ln)),
         Trunk(side="right", x_m=float(rx), z_m=float(rz), u=float(ru[0]), v=float(rv[0]), n_points=int(rn)),
     ]
-    result.confidence = 0.85 if abs(lat) < 0.15 else 0.70
-    result.notes.append("desk_pens")
+    result.confidence = _pen_confidence(ln, rn, lz, rz, lspan, rspan, gap, config)
     return result
+
+
+def _pen_confidence(ln, rn, lz, rz, lspan, rspan, gap, config: GuidanceConfig) -> float:
+    """How clean the two-pen lock is (not how centered you are)."""
+
+    def unit(x: float) -> float:
+        return float(np.clip(x, 0.0, 1.0))
+
+    points = unit(min(ln, rn) / 60.0)
+    depth_match = unit(1.0 - abs(lz - rz) / 0.30)
+    compact = unit(1.0 - max(lspan, rspan) / max(config.desk_max_span_m, 1e-3))
+    gap_q = unit(1.0 - abs(gap - 0.30) / 0.40)
+    return float(np.clip(0.30 + 0.28 * points + 0.22 * depth_match + 0.12 * compact + 0.08 * gap_q, 0.05, 0.99))
 
 
 def perceive(frame: Frame, config: GuidanceConfig) -> RowPerception:
