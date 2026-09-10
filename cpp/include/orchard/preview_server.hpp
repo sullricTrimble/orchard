@@ -16,6 +16,7 @@ public:
     int port() const { return port_; }
 private:
     void run();
+    void serve_client(int client);
     int port_ = 0;
     int listen_fd_ = -1;
     std::atomic<bool> ok_{false};

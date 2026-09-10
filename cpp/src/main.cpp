@@ -48,12 +48,13 @@ int main(int argc, char** argv) {
         else if (arg_eq(argv[i],"--trunk-max") && i+1<argc) cfg.trunk_height_max_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--camera-height") && i+1<argc) cfg.camera_height_m=(float)atof(argv[++i]);
         else if (arg_eq(argv[i],"--print-period") && i+1<argc) cfg.print_period_s=(float)atof(argv[++i]);
+        else std::cerr << "Unknown argument: " << argv[i] << "\n";
     }
+    if (http_port > 0 && std::getenv("DISPLAY")) gui = true;
     PreviewServer preview(http_port);
-    if (http_port > 0) {
-        if (preview.ok()) std::cout << "Preview: http://0.0.0.0:" << http_port << "  (open this Pi's IP from your PC)\n";
-        else std::cerr << "Preview server failed to start on port " << http_port << "\n";
-    }
+    if (http_port > 0 && !preview.ok())
+        std::cerr << "Preview server failed to bind port " << http_port << " (is it already in use?)\n";
+    if (gui) std::cout << "On-screen window: Guidance  (needs a desktop/HDMI session)\n";
     if (source=="sim") {
         auto world=build_world(cfg); TractorPose pose; pose.x_m=0.65f; pose.yaw_rad=7.f*0.0174533f; pose.s_m=6.f;
         VelocityEstimator vel(cfg); float dt=1.f/15.f; double t=0;
